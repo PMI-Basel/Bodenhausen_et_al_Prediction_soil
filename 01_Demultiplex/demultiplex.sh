@@ -1,0 +1,97 @@
+#!/bin/bash
+
+#SBATCH --qos=1day
+#SBATCH --time=24:00:00
+#SBATCH --mem=20g
+#SBATCH --output=demultiplex.out
+#SBATCH --error=demultiplex.error
+#SBATCH --job-name=demultiplex
+#SBATCH --cpus-per-task=16
+#SBATCH --mail-user=jan.waelchli@unibas.ch
+#SBATCH --mail-type=ALL
+
+#load modules
+module load foss/2018b #interpreters
+module load SMRT-Link/9.0.0.92188-cli-tools-only
+module load SAMtools/1.9-foss-2018b
+module load picard/2.9.2
+module load cutadapt/2.10-foss-2018b-Python-3.6.6
+
+#raw data must be called: name.subreads.bam (name can't have a ".")
+all_raw_data=$(ls ../00_raw_data/)
+
+# running time notification
+echo "start script"
+
+for raw_data in $all_raw_data; do
+
+    # get name
+    name=$(echo ${raw_data} | cut -f1 -d ".")
+
+    #running time notification
+    echo ${name} "started"
+
+    #convert raw data to circular consensus sequences (package SMRT)
+    ccs ../00_raw_data/${raw_data} ${name}.ccs.bam --min-passes 5
+
+    #running time notification
+    echo ${raw_data} "converted to ccs"
+
+
+    #demultiplex the ccs file (package SMRT)
+    #barcodes must be in one file (forward and reverse) in a file called barcode.fasta
+    #barcode.fasta must be in a folder called ${name}
+    #forward primers must start with "F"
+    #reverse primers must start with "R"
+    #no IUPAC bases allowed
+    rm -r bam 2> /dev/null
+    mkdir bam 2> /dev/null
+    lima ${name}.ccs.bam ${name}/barcode.fasta bam/${name}.xml --different --split-bam-named --peek-guess --ccs
+
+    #convert bam file to fastq file
+    mkdir out 2> /dev/null
+    rm -r out/${name} 2> /dev/null
+    mkdir out/${name}
+    cd bam
+    ls *.bam > bam_names.txt
+    while read infile; do
+      outfile=$(echo ${infile} | cut -f3 -d ".") #adapt this part
+      #samtools bam2fq ${infile} > ../out/${name}/${outfile}.uncut.fastq
+      samtools bam2fq ${infile} > ../out/${name}/${outfile}.fastq
+    done < bam_names.txt
+    rm bam_names.txt
+    cd ..
+    rm -r bam
+
+    #delete F-F and R-R combinations
+    #forward primers must start with "F"
+    #reverse primers must start with "R"
+    cd out/${name}
+    rm *--F* R* #F--F or R--R combinations
+    rename "-" "" *
+    cd ../..
+
+    #running time notification
+    echo ${raw_data} "demultiplexed"
+
+done
+
+#move control samples to a separated folder
+microbials=$(ls out)
+for m in ${microbials}; do
+  #move all files in controls_notused folder
+  cd out/${m}
+  mkdir controls_notused
+  mv *.fastq controls_notused
+
+  #take used files out
+  while read infile; do
+    mv controls_notused/${infile} .
+  done < ../../${m}/samples.txt
+  cd ../..
+done
+
+# running time notification
+echo "end script"
+echo "the following data has been processed:"
+echo ${all_raw_data}
