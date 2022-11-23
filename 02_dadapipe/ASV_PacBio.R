@@ -90,7 +90,7 @@ for (run in runs) {
 
   #filter
   #max Len prevents double and triple CCS reads to pass the filter
-  track <- filterAndTrim(nop, filts, minQ=3, minLen=500, maxLen=1800, maxN=0, rm.phix=T, maxEE=2, multithread = T)
+  track <- filterAndTrim(nop, filts, minQ=3, minLen=500, maxLen=1800, maxN=0, rm.phix=F, maxEE=2, multithread = T)
 
   assign(paste(run, "track", sep="_"), track)
   saveRDS(track, paste(path.rds, run, "_out.RDS", sep=""))
