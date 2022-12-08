@@ -1,6 +1,6 @@
 # Predicting fungal communities from soil properties
 ### Bodenhausen et al
-This is the home of all the bioinformatic code used in our paper: LINK
+This is the home of all the bioinformatic code used in our paper: LINK  
 Calculations were performed at sciCORE (http://scicore.unibas.ch/) scientific computing center at University of Basel.
 
 #### 01: Demultiplexing
