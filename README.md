@@ -11,3 +11,9 @@ This folder contains all code to run the dadapipe. With **dada2** sequences were
 
 #### 03: ASV tables
 This folder contains all output files created by the dadapipe. These are count tables, sequences and taxonomy of ASVs with different similarity thresholds and files to check quality. 
+
+#### 04: statistical analysis
+This folder contains the five scripts for the statistical analysis.
+
+#### 05: metadata
+This folder contains the metadata for the the statistical analysis.
