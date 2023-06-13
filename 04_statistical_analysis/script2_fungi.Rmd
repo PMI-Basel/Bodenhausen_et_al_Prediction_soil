@@ -1,0 +1,1561 @@
+---
+title: "Predicting fungal communities from soil properties"
+subtitle: "Script 2: fungal communities"
+author: Jan Waelchli and Natacha Bodenhausen 
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+        toc: yes
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE)
+
+## not working on my computer
+## set source to file location
+# library(rstudioapi)
+# setwd(dirname(getActiveDocumentContext()$path))
+
+#libraries
+
+
+suppressPackageStartupMessages(library(tidyverse))
+library(vegan) # not sure if it necessary because it is in phyloseq
+library("phyloseq")
+library("kableExtra") # to style the tables 
+library(soiltexture) # ternary plot
+library(ggcorrplot) # correlogram
+#library("factoextra") # plot PCA results
+# library(gplots) #heatmap.2
+library(gridExtra) ## grid_arrange
+library(cowplot) # plot_grid => several plots in one figure
+library(viridis) # color for people with colorblindness  
+library(ggrepel) # geom_text_repel
+
+
+# same color as ggplot
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+set.seed(8037)
+
+
+# dir.create("../figures")
+# dir.create("../results")
+
+# logical: would you like figures?
+makeFig <- FALSE
+
+# logical: we would you like to work with first sequencing  
+# where each year was sequenced separately or not (m11)
+
+m1m8m9 <- TRUE 
+
+# logical: would you like to save R objects for the next scripts?
+
+saveRObjects <- FALSE
+
+```
+
+
+```{r}
+
+my_theme <- theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+  
+theme_main <-theme(text = element_text(size = 10))
+
+theme_supp <-theme(text = element_text(size = 10))
+
+theme_presentation <-theme(text = element_text(size = 20))
+
+
+```
+
+\newpage
+
+# Material and methods 
+
+## 2018
+
+22 fields were sampled in the spring 2018
+
+4 DNA extractions per field done by Alain in the summer 2018.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial1" was prepared by Alain at Reckenholz and sequenced by FGCZ.
+
+
+## 2019
+
+25 fields were sampled in the spring 2019
+
+4 DNA extractions per field done by Alain in the spring 2020.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial6" was prepared by Markus at UniBasel and sequenced by Unibern.
+
+Quality of sequencing really bad, so Gabriel prepared a second library, called "microbial8".
+
+## 2020
+
+12 fields were sampled in the spring 2020
+
+4 DNA extractions per field  done by Alain in the winter 2021.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial9" was prepared by Gabriel at Uni Basel and sequenced in Bern.
+
+## 2022
+
+All samples were resequenced in a fourth library "microbial11" in 2022. The four DNA replicates were pooled before the PCR, so there is only one PCR per field.
+
+## Bioinformatics
+
+Date from the four libraries were clustered together.
+
+
+\newpage
+
+
+
+# Fungal community
+
+```{r}
+
+
+#################
+#table also inclues m11
+#import ASV table
+otu <- read.delim("../03_ASV_tables/ASV97/DAT97.tab", header=T, row.names=1, sep="\t")
+
+#import taxonomy table
+tax <- read.delim("../03_ASV_tables/ASV97/TAXA97.tab", header=T, row.names=1, sep="\t")
+#################
+
+#  keep NA because they show us as grey in barplot
+#tax[is.na(tax)] <- "unassigned"
+
+# remove the unnecessary letters
+tax$Kingdom <- gsub("k__","", tax$Kingdom )
+tax$Phylum <- gsub("p__","", tax$Phylum )
+tax$Class <- gsub("c__","", tax$Class )
+tax$Order <- gsub("o__","", tax$Order )
+tax$Family <- gsub("f__","", tax$Family )
+tax$Genus <- gsub("g__","", tax$Genus )
+tax$Species <- gsub("s__","", tax$Species )
+
+
+otu_for_phyloseq <- otu_table(otu , taxa_are_rows = FALSE)
+
+tax_for_phyloseq <- tax_table(as.matrix(tax))
+
+physeq <- phyloseq(otu_for_phyloseq, tax_for_phyloseq )
+
+
+
+
+
+physeq
+
+n1 <- sum(otu_table(physeq))
+
+```
+
+The initial ASV table has `r nsamples(physeq)` samples and `r n1` sequences and `r ntaxa(physeq)` otus.
+
+## add sample information
+
+```{r, echo=FALSE}
+
+sample_table_2018 <- read.csv("../05_metadata/Pacbio_library1_barcodes_otherNames.csv",row.names = "Jan_name")
+
+sample_table_2018 <- sample_table_2018 %>%  
+  rownames_to_column("sample_name") %>% 
+  as_tibble() %>% 
+  dplyr::select(c("sample_name", "field", "replicate", "sample","forward_primer","reverse_primer")) %>%
+  dplyr::rename(Sample_ID = sample ) %>%
+  mutate(library = 2018)%>%
+  mutate(resequenced  = "no")
+
+sample_table_2019 <- read.csv("../05_metadata/microbials8_design_table_otherName.csv", row.names = "Jan_name")
+
+sample_table_2019 <- sample_table_2019 %>%  
+  rownames_to_column("sample_name") %>% 
+  as_tibble() %>% 
+  dplyr::select(c("sample_name",  "field", 
+                  "replicate", "Sample_ID",
+                  "foward","reverse")) %>%
+  dplyr::rename(forward_primer = foward ) %>%
+  dplyr::rename(reverse_primer = reverse ) %>%
+  mutate(library = 2019)%>%
+  mutate(resequenced  = "no")
+
+
+sample_table_2020 <- read.csv("../05_metadata/microbials9_design_table_otherName.csv", row.names = "Jan_name")
+
+sample_table_2020 <- sample_table_2020 %>%
+  unite("Sample_ID",
+        field:replicate,
+        sep=".",
+        remove = FALSE )
+
+
+sample_table_2020 <- sample_table_2020 %>%  
+  rownames_to_column("sample_name") %>% 
+  as_tibble() %>% 
+  dplyr::rename(forward_primer = forward ) %>%
+  dplyr::rename(reverse_primer = reverse ) %>%
+  mutate(library = 2020)%>%
+  mutate(resequenced  = "no")
+
+
+sample_table_2022 <- read.csv("../05_metadata/microbials11_design_table_otherName.csv", row.names = "Jan_name")
+
+
+sample_table_2022 <- sample_table_2022 %>%  
+  rownames_to_column("sample_name") %>% 
+  as_tibble() %>% 
+  dplyr::rename(forward_primer = forward ) %>%
+  dplyr::rename(reverse_primer = reverse ) %>%
+  mutate(library = 2022)%>%
+  mutate(resequenced  = "yes")
+
+sample_table_2022$field <- gsub("r","",sample_table_2022$field)
+
+#there were a few samples which had not enough volume to pipette (were done a second time), remove them
+samples_to_remove <- c("R35_F52", "R39_F49",  "R33_F49", "R35_F50", "R36_F47")
+
+sample_table_2022 <- sample_table_2022[!(paste0(sample_table_2022$reverse_primer, "_", sample_table_2022$forward_primer) %in% samples_to_remove),]
+
+
+
+
+
+sample_table <-bind_rows(sample_table_2019,
+                         sample_table_2018, 
+                         sample_table_2020,
+                         sample_table_2022) 
+
+
+sample_table <- sample_table %>% 
+  mutate(library = as_factor(library))  %>% 
+  column_to_rownames("sample_name")
+
+
+#rename 2022 to the corresponding years
+sample_table$library <- as.character(sample_table$library)
+
+for(i in c(2018,2019,2020)){
+  fields <- sample_table$field[sample_table$library==i]
+  
+  sample_table$library[sample_table$field %in% fields] <- i
+}
+
+
+sample_table$library <- as.factor(sample_table$library)
+
+
+
+```
+
+## chose  which library to analyze
+
+m1m8m9 == TRUE, analyze the first three libraries (called microbials8, microbials9, and microbials10), where a PCR was made from each replicate of the DNA extraction (4 replicates per field) and each year was sequenced separately.
+
+m1m8m9 == FALSE, analyze the last library (microbials11), where the four DNA extractions were pooled before the PCR and all three years where sequenced together.
+
+```{r}
+  # subset either m1m8m9 or m11 
+
+
+if(m1m8m9 == TRUE) {
+sample_table<- filter(sample_table, resequenced == "no")
+} else {
+  sample_table<- filter(sample_table, resequenced == "yes")
+}
+
+
+
+sample_data(physeq) <-sample_table
+
+physeq
+
+n2 <-sum(otu_table(physeq))
+
+# nsamples(physeq) # 249 samples
+# nrow(sample_table)  # 251 samples
+
+# remove zero OTUs
+physeq <-prune_taxa(taxa_sums(physeq) > 0, physeq)
+
+print("This script uses either data from the three first sequencing librairies (m1m8m9) or fourth sequencing library (m11)")
+```
+
+```{r, echo = TRUE}
+m1m8m9
+
+```
+
+After adding the sample names, the ASV table has `r nsamples(physeq)` samples and `r n2` sequences, which represents `r format(round(n2/n1*100,2), scientific = FALSE)` \% sequences of the OTU table.
+
+Mean number of sequences  is `r round(n2/nsamples(physeq),2)`.
+
+
+###  what are the missing sample?
+
+
+
+```{r}
+
+missing_samples <- setdiff(rownames(sample_table), sample_names(physeq))
+
+sample_table %>% filter(row.names(sample_table) %in% missing_samples)
+
+# note the so-called "positive" in 2019  is actually a negative sample
+# see email from Gabriel Deslandes, March 26 2021
+
+```
+
+These are samples which were included in the library by the technician (PCR was made with them), but no sequences are found in the Pacbio data, probably because the DNA was too low (no template control).
+
+\newpage
+
+
+
+```{r, number_sequences_perSample_2018}
+
+# Define an object for position jitterdodge, to use below
+posn.jd <- position_jitterdodge(0.3, 0, 0.7)
+
+
+number_sequences_perSample <-sample_sums(physeq)
+
+for_ggplot<- cbind("number_sequences_perSample" = number_sequences_perSample, sample_data(physeq))
+
+if(m1m8m9 == TRUE) {
+  black_line <-min(for_ggplot %>% 
+  filter(number_sequences_perSample >100) %>% 
+  select(number_sequences_perSample))} else {black_line <- min(number_sequences_perSample)}
+
+#number_sequences_perSample [number_sequences_perSample<1000]
+
+
+ggplot(dat=for_ggplot, aes(x=field, 
+                           y=number_sequences_perSample, 
+                           col=field))+
+  geom_point(alpha=0.6, size = 3, position = posn.jd)+
+  theme(legend.position = "none")+
+  facet_wrap(library~., nrow = 3 , scales = "free")+
+  geom_hline(yintercept = black_line)+
+  ggtitle("number of sequences per sample")
+
+
+```
+
+The number of sequences per sample differs for each library. It was highest in 2018 and lowest in 2020.
+
+The horizontal line shows the smallest number of sequences (`r black_line` ) after removing the very low sample .
+
+\newpage
+
+## Remove  positive and negative controls
+
+
+
+```{r}
+
+# 2018
+physeq <- prune_samples( !sample_data(physeq)$field%in%c("H2O","not_used"), physeq)
+
+
+# 2019 
+physeq <- prune_samples( !sample_data(physeq)$field%in%c("negative","positive"), physeq)
+
+# 2020 
+physeq <- prune_samples( !sample_data(physeq)$field%in%c("leer","P+7H"), physeq)
+
+
+physeq
+```
+
+
+
+
+
+## Only for m1m8m9: Remove one sample which is below 25
+
+
+```{r}
+#sample_sums(physeq)[order(sample_sums(physeq))]
+if(m1m8m9 == TRUE) {
+  
+physeq_failed <- prune_samples(sample_sums(physeq)<25, physeq)
+
+sample_data(physeq_failed)
+
+physeq <- prune_samples(sample_sums(physeq)>=25, physeq)
+
+physeq
+
+}
+
+
+
+```
+ 
+
+```{r, echo = TRUE}
+
+#sum(taxa_sums(physeq) < 1 )
+
+# remove singletons
+physeq <-prune_taxa(taxa_sums(physeq) > 1, physeq) 
+
+
+physeq_norm<-  transform_sample_counts(physeq, function(x) x / sum(x) )
+
+
+```
+
+
+\newpage
+
+```{r}
+
+if(m1m8m9 == TRUE) {
+#rowSums(otu_table(physeq_norm))
+
+lib1 <- subset_samples(physeq_norm, library=="2018" )
+
+lib2 <- subset_samples(physeq_norm, library=="2019" )
+
+lib3 <- subset_samples(physeq_norm, library=="2020" )
+
+# remove zero OTU  
+
+lib1 <-prune_taxa(taxa_sums(lib1) > 0, lib1)
+
+lib2 <-prune_taxa(taxa_sums(lib2) > 0, lib2)
+
+lib3 <-prune_taxa(taxa_sums(lib3) > 0, lib3)
+
+
+#save physeq_norm for script5
+if(saveRObjects == TRUE){save(physeq_norm, file="../results/physeq_m1_m8_m9_norm_unmerged.rda")}
+
+}
+
+
+```
+
+# Only for m1m8m9: PCA all replicates
+
+##  2018 PCA (hellinger distance) all replicates
+
+```{r}
+if(m1m8m9 == TRUE){
+  
+# OTU
+taxonTable <-otu_table(lib1, taxa_are_rows = FALSE)
+
+designTable <-sample_data(lib1)
+
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+spe.h.pca  <- rda(taxon_table_hell)
+
+percent_axis <-round(spe.h.pca$CA$eig/spe.h.pca$tot.chi *100,1)
+
+coordi <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+sites_for_plot <-cbind(as.data.frame(scores(spe.h.pca)$sites), designTable)
+
+species_for_plot <-as.data.frame(scores(spe.h.pca)$species)
+
+
+PCA1 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), 
+  # color = "grey", shape = "cross", 
+  #            data = species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = field), 
+             data = sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = field, 
+                 label = field), 
+            hjust = 0, nudge_x = .02, data = sites_for_plot) +
+  #coord_equal(ratio = 1, clip = "off") +
+  theme_bw() +
+  labs(x = coordi[1], y = coordi[2]) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())+
+  theme(legend.position = "none")+
+  theme(text = element_text(size=9))
+
+print(PCA1) 
+}
+
+
+
+
+```
+
+
+##  2019 PCA (hellinger distance) all replicates
+
+```{r}
+if(m1m8m9 == TRUE) {
+# OTU
+taxonTable <-otu_table(lib2, taxa_are_rows = FALSE)
+
+designTable <-sample_data(lib2)
+
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+spe.h.pca  <- rda(taxon_table_hell)
+
+percent_axis <-round(spe.h.pca$CA$eig/spe.h.pca$tot.chi *100,1)
+
+coordi <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+sites_for_plot <-cbind(as.data.frame(scores(spe.h.pca)$sites), designTable)
+
+species_for_plot <-as.data.frame(scores(spe.h.pca)$species)
+
+
+PCA2 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), 
+  # color = "grey", shape = "cross", 
+  #            data = species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = field), 
+             data = sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = field, 
+                 label = field), 
+            hjust = 0, nudge_x = .02, data = sites_for_plot) +
+  #coord_equal(ratio = 1, clip = "off") +
+  theme_bw() +
+  labs(x = coordi[1], y = coordi[2]) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())+
+  theme(legend.position = "none")+
+  theme(text = element_text(size=9))
+
+print(PCA2) 
+}
+
+
+
+```
+
+
+##  2020 PCA (hellinger distance) all replicates
+
+```{r}
+if(m1m8m9 == TRUE) {
+# OTU
+taxonTable <-otu_table(lib3, taxa_are_rows = FALSE)
+
+designTable <-sample_data(lib3)
+
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+spe.h.pca  <- rda(taxon_table_hell)
+
+percent_axis <-round(spe.h.pca$CA$eig/spe.h.pca$tot.chi *100,1)
+
+coordi <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+sites_for_plot <-cbind(as.data.frame(scores(spe.h.pca)$sites), designTable)
+
+species_for_plot <-as.data.frame(scores(spe.h.pca)$species)
+
+
+PCA3 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), 
+  # color = "grey", shape = "cross", 
+  #            data = species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = field), 
+             data = sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = field, 
+                 label = field), 
+            hjust = 0, nudge_x = .02, data = sites_for_plot) +
+  #coord_equal(ratio = 1, clip = "off") +
+  theme_bw() +
+  labs(x = coordi[1], y = coordi[2]) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())+
+  theme(legend.position = "none")+
+  theme(text = element_text(size=9))
+
+print(PCA3) 
+}
+
+
+
+
+```
+
+
+```{r}
+if(m1m8m9 == TRUE) {
+three_pca <-plot_grid(PCA1 + theme_supp,
+                      PCA2 + theme_supp, 
+                      PCA3 + theme_supp,
+                      labels = c('A', 'B', 'C'),
+                      nrow = 3,
+                      label_size = 12)
+
+#print(three_pca)
+
+if(makeFig == TRUE) ggsave("../figures/three_pca.pdf",
+                           three_pca,
+                           width = 7, 
+                           height = 21, 
+                           units = "cm")
+}
+
+
+
+```
+
+\newpage
+
+
+# Only for m1m8m9: merge replicates 
+
+```{r}
+if(m1m8m9 == TRUE) {
+physeq_merged_field <- merge_samples(physeq, group= "field")
+
+# field becomes NA
+# library became a continuous variable
+
+xx <- data.frame(sample_data(physeq_merged_field))
+
+xx <-xx %>% 
+  dplyr::select(library)%>% 
+  rownames_to_column("field") %>% 
+  mutate(library=  as_factor(library)) %>% 
+  mutate(library = recode(library, 
+                          "1" = "2018", 
+                          "2" = "2019",
+                          "3" = "2020")) 
+
+rownames(xx) <- xx$field
+
+sample_data(physeq_merged_field) <- xx
+} else {
+  physeq_merged_field <- physeq
+  
+  sample_names(physeq_merged_field) <- sample_data(physeq_merged_field)$field
+}
+
+
+
+```
+
+
+# Rarefaction plot
+
+```{r prepare_rarefaction_plot, include=FALSE}
+
+for_vegan <- as.data.frame(otu_table(physeq_merged_field, 
+                                                 taxa_are_rows =TRUE))
+
+# default plot is all in black, with black lines for the number of samples
+rarefaction_all <- rarecurve(for_vegan, 
+                                step = 100, 
+                                sample = 1000, 
+                                xlab="number of sequences",
+                                ylab="number of OTUs",label=FALSE)
+
+```
+
+
+```{r}
+
+plot_data <- rarefaction_all %>% 
+  purrr::map(~ tibble(
+    y = as.vector(.x),
+    x = unname(attr(.x, "Subsample")),
+    steps = names(.x))) %>%
+  tibble(data = ., sample = seq_along(.)) %>%
+  unnest(.data$data)
+
+stopifnot(identical(sort(unique(plot_data$sample)), 1:NROW(sample_data(physeq_merged_field))))
+
+
+plot_data$color <- sample_data(physeq_merged_field)$library [plot_data$sample]
+
+
+pp <- ggplot(plot_data) +
+  geom_line(aes(x,y, color = color, group = sample)) +
+  geom_vline(xintercept = min(rowSums(otu_table(physeq_merged_field))), color = "darkgrey") +
+  #scale_color_manual(values = six_colors) +
+  labs(x = "number of sequences", 
+       y = "number of OTUs", 
+       color = NULL) +
+  theme_bw() +
+  theme(legend.position = "top")
+
+print(pp)
+
+
+rare_plot <- plot_grid(pp + theme_supp,
+                       labels = 'A',
+                        label_size = 12)
+
+if(makeFig == TRUE) ggsave("../figures/rarefaction.pdf", pp,
+       #pp + mytheme,
+       width = 16, height=9, units="cm")
+
+```
+
+Vertical line shows the field with the lowest number of sequences (`r min(rowSums(otu_table(physeq_merged_field)))`)
+
+
+
+
+
+\newpage
+
+# Number of sequences per sample 
+
+```{r}
+
+number_sequences_perSample <-sample_sums(physeq_merged_field)
+
+nb_sequences_perSample<- cbind("number_sequences_perSample" = number_sequences_perSample, sample_data(physeq_merged_field))
+
+```
+
+
+## mean, standard deviation, and range 
+
+```{r}
+ 
+table_S2 <-nb_sequences_perSample %>% 
+  group_by(library) %>% 
+  summarise(mean = mean(number_sequences_perSample), 
+            sd = sd(number_sequences_perSample),
+            min = min(number_sequences_perSample),
+            max = max(number_sequences_perSample))
+
+table_S2
+
+## data for Supplementary Table 2
+
+if(m1m8m9 & makeFig) write_csv(table_S2, "../results/Supplementary_Table2.csv")
+
+table_S3 <-nb_sequences_perSample %>% 
+  summarise(mean = mean(number_sequences_perSample), 
+            sd = sd(number_sequences_perSample),
+            min = min(number_sequences_perSample),
+            max = max(number_sequences_perSample))
+
+if(!m1m8m9 & makeFig) write_csv(table_S3, "../results/Supplementary_Table3.csv")
+
+
+
+```
+
+## test for library/year effect
+
+```{r}
+
+# m<-lm(number_sequences_perSample ~ 0+library   , data = for_ggplot )
+# 
+# summary(m)
+
+#anova(m)
+
+#TukeyHSD(aov(m))
+
+kruskal.test(number_sequences_perSample ~ library   , data = for_ggplot)
+
+```
+
+The number of sequences per library is different, so according to Weiss et al. we rarefy.
+
+\newpage
+
+# Rarefy with phyloseq
+
+```{r, echo = FALSE}
+
+print("by default, minimum mumber of sequences")
+min(sample_sums(physeq_merged_field))
+
+physeq_rarefied <- rarefy_even_depth(physeq_merged_field, 
+                                     rngseed = 8037) 
+# by default: min(sample_sums(physeq))
+
+physeq_rarefied
+
+```
+
+\newpage
+
+# Filter and normalize data
+
+## Prevalence plot before filtering
+
+https://bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/MicrobiomeWorkflowII.html#filtering
+
+```{r prevalence_plot_before, fig.width=6, fig.height=4}
+
+number_samples <- nsamples(physeq_rarefied )
+
+# Compute prevalence of each feature, store as data.frame
+prevdf = apply(X = otu_table(physeq_rarefied),
+               MARGIN = ifelse(taxa_are_rows(physeq), 
+                               yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+
+# Add taxonomy and total read counts to this data.frame
+prevdf = data.frame(Prevalence = prevdf, # number of samples
+                    TotalAbundance = taxa_sums(physeq_rarefied), # total counts
+                    tax_table(physeq_rarefied))
+
+prevdf <- prevdf %>% 
+  rownames_to_column("otu") %>% 
+  mutate(Prop = Prevalence / number_samples)%>% 
+  arrange(desc(Prevalence))
+
+
+ggplot(prevdf, aes(TotalAbundance, 
+                   Prop,
+                   color=Phylum))+
+    geom_point(size = 2, shape = 20, alpha = 0.7)+
+  geom_hline(yintercept = 0.10, linetype = 2) +
+  #scale_x_log10() +  
+  xlab("Total Abundance") + 
+  ylab("Fraction Samples") +
+  #facet_wrap(~Phylum) + 
+  theme(text = element_text(size=12))+
+  theme_bw()+
+  theme(legend.position="none")+
+  theme_presentation
+
+
+# ggsave("../figures/prevalence_plot.pdf",
+#        width = 16, height=11, units="cm")
+
+```
+
+## filter based on prevalence
+
+https://ucdavis-bioinformatics-training.github.io/2017-September-Microbial-Community-Analysis-Workshop/friday/MCA_Workshop_R/phyloseq.html
+
+```{r}
+
+prevalenceThreshold = floor(0.10 * nsamples(physeq_rarefied))
+
+prevalenceThreshold
+
+prevdf <-prevdf %>% filter(Prevalence >prevalenceThreshold)
+
+keepTaxa <- prevdf$otu
+
+length(keepTaxa)
+
+physeq_filtered <- prune_taxa(keepTaxa, physeq_rarefied)
+
+```
+
+
+
+
+```{r}
+
+# before filtering
+n_otu <- ntaxa(physeq_rarefied) # 2799
+n_samples <- nsamples(physeq_rarefied) #59
+n_sequences <- sum(otu_table(physeq_rarefied)) # 252225
+
+# after filtering
+
+n_otu_afterFiltering <- ntaxa(physeq_filtered) # 460
+
+n_samples_afterFiltering <- nsamples(physeq_filtered) #59
+
+n_sequences_afterFiltering<- sum(otu_table(physeq_filtered)) # 228365
+
+otu_kept <- round(100*n_otu_afterFiltering/n_otu,0)
+seq_kept <- round(100*n_sequences_afterFiltering/n_sequences)
+
+
+xx<-data.frame("number of OTUs" = c(n_otu, n_otu_afterFiltering, otu_kept), 
+      "number of sequences"=c(n_sequences, n_sequences_afterFiltering,seq_kept))
+rownames(xx)<- c("before filtering", "after filtering", "proportion kept")
+ 
+kable(xx)
+
+```
+
+
+## normalize
+
+```{r, echo = TRUE}
+
+#  we like to have percentages
+physeq_norm<-  transform_sample_counts(physeq_filtered, function(x) x / sum(x)*100 )
+
+# check that we have percentages
+#rowSums(otu_table(physeq_norm))
+
+
+# lots of OTUs with no sequences 
+# colSums(otu_table(physeq_norm)==0)
+
+```
+
+
+\newpage
+
+# Stacked barplot at the phylum level
+
+
+```{r}
+
+# aggregate the OTUs with same Phylum names
+dat_merge <- tax_glom(physeq = physeq_norm, 
+                      "Phylum", NArm = FALSE) 
+#rowSums(otu_table(dat_merge))
+
+molten_dat_phylum_merge <- psmelt(dat_merge)
+
+```
+
+```{r}
+
+molten_dat_phylum_merge<- molten_dat_phylum_merge %>%
+  mutate("Taxonomy" = case_when(Abundance >= 5 ~ Phylum,
+                             Abundance < 5 ~ "less than 5%"))
+
+
+## similar color as our last paper 
+# but use brewer pal colors
+# display.brewer.pal(9, name = "Set1")
+# brewer.pal(9, name = "Set1")
+
+plotColorBarplot_ITS=c(
+    "Ascomycota"="#377EB8", # blue
+    "Basidiomycota"="#E41A1C", # red
+    "Chytridiomycota"="#FF7F00", # orange
+    "Mortierellomycota"="#F781BF", # pink
+    "Olpidiomycota"="#FFFF33", # yellow
+    "Zoopagomycota"="#A65628", # brown
+   # "unassigned"="dimgrey",
+    "less than 5%"="#999999",# grey
+   "NA" = "lightgrey") 
+
+
+p_phyla <- ggplot(molten_dat_phylum_merge, 
+                  aes_string(x = "Sample", 
+                             y = "Abundance",
+                             fill="Taxonomy")) + 
+  geom_bar(stat = "identity", position = "stack")+
+  facet_wrap(vars(library),  nrow = 3, scales="free_x")+
+  labs( y = "Relative abundance (%)")+
+  theme(legend.position="bottom")+
+scale_fill_manual(values=plotColorBarplot_ITS, na.value="lightgrey")+
+  theme_supp
+  
+
+p_phyla
+
+if(makeFig == TRUE) ggsave("../figures/stacked_barplot.pdf",
+       p_phyla, 
+       width = 18, 
+       height = 17, 
+       units = "cm")
+
+```
+
+
+```{r}
+
+molten_dat_phylum_merge  %>% 
+  filter(Phylum == "Chytridiomycota") %>% 
+  filter(Taxonomy == "Chytridiomycota")  %>%
+  arrange(field)
+
+molten_dat_phylum_merge  %>% 
+  filter(Phylum == "Zoopagomycota") %>% 
+  filter(Taxonomy == "Zoopagomycota") %>%
+  arrange(field)
+
+molten_dat_phylum_merge  %>% 
+  filter(Phylum == "Olpidiomycota") %>% 
+  filter(Taxonomy == "Olpidiomycota") %>%
+  arrange(field)
+
+```
+
+\newpage
+
+# Defining the core community 
+
+## based on prevalence plot (now of filtered data)
+
+```{r prevalence_plot_filtered, fig.width=6, fig.height=4}
+
+number_samples <- nsamples(physeq_filtered)
+
+# Compute prevalence of each feature, store as data.frame
+prevdf = apply(X = otu_table(physeq_filtered),
+               MARGIN = ifelse(taxa_are_rows(physeq), 
+                               yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+
+# Add taxonomy and total read counts to this data.frame
+prevdf = data.frame(Prevalence = prevdf, # number of samples
+                    TotalAbundance = taxa_sums(physeq_filtered), # total counts
+                    tax_table(physeq_filtered))
+
+prevdf <- prevdf %>% 
+  rownames_to_column("otu") %>% 
+  mutate(Prop = Prevalence / number_samples)%>% 
+  arrange(desc(Prevalence))
+
+
+ggplot(prevdf, aes(TotalAbundance, 
+                   Prop,
+                   color=Phylum))+
+    geom_point(size = 2, shape = 20, alpha = 0.7)+
+  geom_hline(yintercept = 0.90, linetype = 2) +
+  ylim(c(0,1))+
+  #scale_x_log10() +  
+  xlab("Total Abundance") + 
+  ylab("Fraction Samples") +
+  #facet_wrap(~Phylum) + 
+  theme(text = element_text(size=12))+
+  theme_bw()+
+  theme(legend.position="none")
+
+
+```
+
+
+## taxonomy of top OTUs
+
+```{r, echo= TRUE}
+
+top_OTU <-prevdf %>% filter(Prop>0.90)
+
+if(saveRObjects == TRUE) {if(m1m8m9 == TRUE) save(top_OTU, file="../results/m1_m8_m9_top_OTU.rda") else save(physeq_norm, file="../results/m11_top_OTU.rda")
+  }
+
+
+
+physeq_top_OTU <- prune_taxa(top_OTU$otu, physeq_norm)
+
+tax_table(physeq_top_OTU)
+
+```
+
+
+```{r}
+# get the highest level of assignement
+
+tax_core <- as.data.frame(tax_table(physeq_top_OTU))
+
+tax_core <- tax_core %>% dplyr::select(-Species, -classifier)
+
+# tax_core <-tax_core %>% 
+#   rownames_to_column("otu") %>% 
+#   mutate( Kingdom= na_if(Kingdom,  "unassigned"))%>% 
+#   mutate( Phylum= na_if(Phylum,  "unassigned"))%>% 
+#   mutate( Class= na_if(Class,  "unassigned"))%>% 
+#   mutate( Order= na_if(Order,  "unassigned"))%>% 
+#   mutate( Family= na_if(Family,  "unassigned"))%>% 
+#   mutate( Genus= na_if(Genus,  "unassigned"))
+
+
+label_taxa <- c()
+  
+for (i in 1:nrow(tax_core)){
+  x <- tax_core[i,]
+  new_value<-tail(x[!is.na(x)],1)
+ label_taxa <-c(label_taxa, new_value)
+}
+
+#label_taxa
+
+```
+
+```{r}
+
+ra <- as.data.frame(otu_table(physeq_top_OTU))
+
+# replace zero with NA for plotting 
+ra <- na_if(ra, 0)
+
+sa <-  data.frame(sample_data(physeq_top_OTU))
+  
+
+for_ggplot <-left_join(ra %>%
+                         rownames_to_column("field"),
+                       sa ,by="field")
+
+```
+
+how many OTUs are absent?
+
+```{r}
+
+colSums(is.na(ra))
+
+```
+
+
+how many OTUs are less than 5%?
+
+in addition, it would be useful to have the field names.
+
+```{r}
+
+colSums(ra<0.05, na.rm = TRUE)
+
+```
+
+
+what is the mean relative abundance?
+
+```{r}
+
+mean_ra <-ra %>% summarise_all(mean, na.rm = TRUE)
+
+mean_ra
+
+```
+
+
+```{r}
+
+tax_core <- as.data.frame(tax_table(physeq_top_OTU))
+
+big_tax <- left_join(tax_core %>% rownames_to_column("otu"), as.data.frame(t(mean_ra)) %>% rownames_to_column("otu"), by = "otu")
+
+
+ if(makeFig == TRUE) write_csv(big_tax, "../results/Table1.csv")
+
+```
+
+
+```{r, eval= TRUE}
+
+# long format
+plt_dat <-  for_ggplot%>% 
+  pivot_longer(cols = starts_with("OTU"),
+   names_to = "otu", 
+   values_to = "relative_abundance")
+
+plt_dat <- plt_dat %>% mutate(otu = as_factor(otu))
+
+# my_order <- c("OTU31","OTU24", "OTU21",
+#               "OTU19", "OTU16", "OTU15",
+#               "OTU13","OTU12", "OTU9",
+#               "OTU8", "OTU6", "OTU5",
+#               "OTU3","OTU2","OTU1")
+# 
+# 
+# plt_dat <- plt_dat %>% arrange(match(otu, my_order))
+
+# order OTUs by the name => which is also their abundance
+
+plt_dat <- plt_dat %>% mutate(otu = fct_relevel(otu, rev))
+
+```
+
+\newpage
+
+## hiearchical clustering
+
+```{r}
+
+for_vegan <- ra %>% 
+  replace(is.na(.), 0)
+
+# bray-curtis
+bc <-vegdist(for_vegan, method = "bray")
+
+bc_binary <-vegdist(for_vegan, method = "bray", binary = TRUE)
+
+hc_fields <-hclust(bc, method = "ward.D")
+
+old_cluster <-cutree(hc_fields, k =4)
+
+tree_cluster <- as.data.frame(old_cluster) %>%
+  rownames_to_column("field")
+
+newcluster <- data.frame(old_cluster = c(1, 2,3, 4), new_cluster = c(2, 1, 3, 4))
+
+tree_cluster <- left_join(tree_cluster, newcluster, by = "old_cluster")
+
+if(saveRObjects == TRUE) {
+  save(tree_cluster,
+       file="../results/m1_m8_m9_tree_cluster.rda")
+  }
+
+
+cutree(hc_fields, k =4)
+
+sort(cutree(hc_fields, k =4))
+
+plot(hc_fields,  hang = -1, 
+     xlab="", ylab="", main ="", sub ="", 
+     frame.plot  = FALSE, axes =FALSE)
+
+
+```
+
+```{r, eval = TRUE}
+if(makeFig == TRUE){
+
+pdf("../figures/clustering_core_tree_labels.pdf",
+    width=18/cm(1), 
+    height=5/cm(1), 
+    pointsize=7)
+  
+plot(hc_fields,  hang = -1,
+     xlab="", ylab="", main ="", sub ="",
+     axes =FALSE)
+
+dev.off()
+
+pdf("../figures/clustering_core_tree_NO_labels.pdf",
+    width=17/cm(1), height=4/cm(1), pointsize=7)
+
+plot(hc_fields,  hang = -1,
+     xlab="", ylab="", main ="", sub ="",
+     labels = FALSE, axes =FALSE)
+
+dev.off()
+
+}
+
+```
+
+## re-order levels of data before geom_tile
+
+```{r}
+
+x2 <- hc_fields$order
+x1 <- hc_fields$labels
+
+my_order <-x1[x2]
+
+
+plt_dat <- plt_dat %>% mutate(field = as_factor(field))
+
+plt_dat$field2 <-factor(plt_dat$field, 
+                        levels = my_order)
+
+# to do: find tidyverse alternative
+# this does not work
+#plt_dat <- plt_dat %>% mutate(field3 = reorder(field, my_order))
+
+```
+
+## heatmap ggplot
+
+```{r}
+
+heat_otu<- ggplot(plt_dat, aes(field2, otu, fill= relative_abundance)) + 
+  geom_tile()+
+  #scale_fill_viridis(discrete=FALSE) +
+  # theme(axis.text.x = 
+  #         element_text(angle = 90,
+  #                      vjust = 0.5, hjust=1))+
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank())+
+  theme(legend.position = "bottom")+
+  xlab("")+
+  ylab("")+
+  labs(fill = "relative abundance (%)")+
+  scale_fill_viridis(discrete=FALSE, 
+                     trans = scales::log10_trans(),
+                     na.value = grey(0.8), 
+                     direction = -1)+
+  theme_main
+
+heat_otu
+
+if(makeFig == TRUE) ggsave("../figures/core_commmunity_heatmap.pdf",
+        heat_otu + theme_main,
+     width = 18, height=12, units="cm")
+ 
+```
+
+```{r, eval = FALSE}
+# for illustrator
+ggsave("../figures/core_commmunity_heatmap.eps",
+        heat_otu + theme_main,
+     width = 18, height=12, units="cm")
+
+```
+
+\newpage
+
+# beta diversity
+
+## PCA (hellinger distance) with vegan and ggplot2
+
+```{r}
+
+# OTU
+taxonTable <-otu_table(physeq_norm, taxa_are_rows = FALSE)
+
+designTable <-sample_data(physeq_norm)
+
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+```
+
+```{r}
+
+res_pca  <- rda(taxon_table_hell)
+
+percent_axis_pca <-round(res_pca$CA$eig/res_pca$tot.chi *100,1)
+
+coordi_pca <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis_pca[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+sites_for_plot <-cbind(as.data.frame(scores(res_pca)$sites), designTable)
+
+species_for_plot <-as.data.frame(scores(res_pca)$species)
+
+
+```
+
+
+```{r}
+# get coordinates of most extremens points
+g<-ggplot(sites_for_plot, aes(x = PC1,
+                           y = PC2,
+                           label = field))+
+  geom_text()
+
+b <- ggplot_build(g)
+b$layout$panel_params[[1]]$x.range
+b$layout$panel_params[[1]]$y.range
+
+
+```
+
+```{r}
+
+pca <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), color = "grey", shape = "cross", 
+  #            data = species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = library), 
+             data = sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = library, 
+                 label = field), 
+            hjust = 0, nudge_x = .1, 
+            data = sites_for_plot ) +
+ coord_equal(ratio = 1, clip = "off",
+             xlim = c(-2.5, 2.5),
+             ylim = c(-2.5, 2.5))+
+  theme_bw() +
+  my_theme+
+  labs(x = coordi_pca[1], y = coordi_pca[2]) +
+   theme(legend.position = "none")
+
+
+print(pca) 
+  
+
+
+
+```
+
+\newpage
+
+
+
+##  partial redundancy analysis with RDA and ggplot (condition on year)
+
+Based on the unconstrained ordination above, we need to do partial redundancy analysis to condition on year, see here for explanation:
+
+https://mb3is.megx.net/gustame/constrained-analyses/rda/partial-redundancy-analysis
+
+
+```{r}
+res_partial_pca  <- rda(taxon_table_hell ~ Condition(designTable$library))
+
+percent_axis_partial <-round(res_partial_pca$CA$eig/res_partial_pca$tot.chi *100,1)
+
+coordi_PCA_partial <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis_partial[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+partial_sites_for_plot <-cbind(as.data.frame(scores(res_partial_pca)$sites), designTable)
+
+partial_species_for_plot <-as.data.frame(scores(res_partial_pca)$species)
+
+```
+
+
+```{r}
+# get coordinates of most extremens points
+g<-ggplot(partial_sites_for_plot, aes(x = PC1,
+                           y = PC2,
+                           label = field))+
+  geom_text()
+
+b <- ggplot_build(g)
+b$layout$panel_params[[1]]$x.range
+b$layout$panel_params[[1]]$y.range
+
+
+```
+
+```{r}
+
+rda_partial <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), color = "grey", shape = "cross", 
+  #            data = partial_species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = library), data = partial_sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = library, label = field), 
+            hjust = 0, nudge_x = .1, data = partial_sites_for_plot) +
+  coord_equal(ratio = 1, 
+              clip = "off",
+              xlim = c(-2.5, 2.5),
+              ylim = c(-2.5, 2.5)) +
+  theme_bw() +
+  labs(x = coordi_PCA_partial[1],
+       y = coordi_PCA_partial[2]) +
+  my_theme+
+  theme(legend.position = "none")
+
+print(rda_partial) 
+  
+
+
+```
+
+```{r}
+
+pca_condition <-plot_grid(pca + theme_supp ,
+                      rda_partial + theme_supp, 
+                       nrow = 2,
+                      labels = c('A', 'B'),
+                      label_size = 12)
+
+print(pca_condition)
+
+if(makeFig == TRUE) ggsave("../figures/pca_rda_partial.pdf",
+       pca_condition,
+       width = 8, height = 16, units = "cm")
+
+```
+
+\newpage
+
+## vector of dissimilarity
+
+max Bray-Curtis dissimilarity
+
+(Bray-Curtis = 0, communities are identical, Bray-Curtis = 1 communities have no overlap)
+
+```{r}
+# from Loic: pearson correlation
+# yy <- cor(t(taxon_table_hell), method = "pearson")
+# 
+# diag(yy) <- NA
+# 
+# max_distance <- apply(as.matrix(yy), 
+#                       1, FUN = max, na.rm = TRUE)
+
+```
+
+
+```{r, echo  = TRUE}
+# bray-curtis
+xx <- as.matrix(vegdist(taxon_table_hell, 
+                method = "bray"))
+diag(xx) <- NA
+
+max_distance <- apply(as.matrix(xx), 
+                      1, FUN = max, na.rm = TRUE)
+
+# prepare for the plot
+max_distance <- as.data.frame(max_distance) %>% rownames_to_column("field")
+
+
+range(max_distance$max_distance)
+
+hist(max_distance$max_distance)
+```
+
+
+```{r}
+
+
+
+
+if(saveRObjects == TRUE){
+  save(max_distance , file = "../results/max_distance.rda")
+}
+
+```
+
+
+## save normalized data 
+
+```{r}
+if(saveRObjects == TRUE){
+  if(m1m8m9 == TRUE){
+    save(physeq_norm, file="../results/physeq_m1_m8_m9_norm.rda")
+  }
+  else{
+    save(physeq_norm, file="../results/physeq_m11_norm.rda")
+  }
+}
+
+```
+
+

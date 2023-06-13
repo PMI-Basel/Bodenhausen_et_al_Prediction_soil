@@ -1,0 +1,658 @@
+---
+title: "Predict Microbial Community"
+substitle: "Script 2: Modelling soil properties and fungal communities"
+author: Natacha Bodenhausen
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+        toc: yes
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+
+
+#libraries
+knitr::opts_chunk$set(echo = FALSE, 
+                      cache = FALSE)
+
+
+suppressPackageStartupMessages(library(tidyverse))
+library(vegan) # not sure if it necessary because it is in phyloseq
+library("phyloseq")
+library("kableExtra") # to style the tables 
+library(soiltexture) # ternary plot
+library(ggcorrplot) # correlogram
+#library("factoextra") # plot PCA results
+# library(gplots) #heatmap.2
+library(gridExtra) ## grid_arrange
+library(cowplot) # plot_grid => several plots in one figure
+library(viridis) # color for people with colorblindness  
+library(ggrepel) # geom_text_repel
+
+
+# same color as ggplot
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+set.seed(8037)
+
+# logical: would you like figures?
+makeFig <- TRUE
+
+# logical: we would you like to work with first sequencing  
+# where each year was sequenced separately or not (m11)
+m1m8m9 <- TRUE
+
+```
+
+
+```{r}
+
+my_theme <- theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+  
+theme_main <-theme(text = 
+                     element_text(size = 10))
+
+theme_supp <-theme(text = 
+                     element_text(size = 10))
+
+theme_presentation <-theme(text = element_text(size = 20))
+
+
+
+```
+
+\newpage
+
+# Material and methods 
+
+## 2018
+
+22 fields were sampled in the spring 2018
+
+4 DNA extractions per field done by Alain in the summer 2018.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial1" was prepared by Alain at Reckenholz and sequenced by FGCZ.
+
+
+## 2019
+
+25 fields were sampled in the spring 2019
+
+4 DNA extractions per field done by Alain in the spring 2020.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial6" was prepared by Markus at UniBasel and sequenced by Unibern.
+
+Quality of sequencing really bad, so Gabriel prepared a second library, called "microbial8".
+
+## 2020
+
+12 fields were sampled in the spring 2020
+
+4 DNA extractions per field  done by Alain in the winter 2021.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial9" was prepared by Gabriel at Uni Basel and sequenced in Bern.
+
+## 2022
+
+All samples were resequenced in a fourth library "microbial11" in 2022. The four DNA replicates were pooled before the PCR, so there is only one PCR per field.
+
+## Bioinformatics
+
+Prepared by Jan Wälchli with new taxonomy from November 2021.
+
+```{r}
+print("This script uses either data from the three librairies (m1m8m9) or fourth library(m11)")
+```
+
+```{r, echo = TRUE}
+m1m8m9
+
+```
+
+
+\newpage
+
+```{r}
+
+
+if(m1m8m9 == TRUE){
+  load(file="../results/physeq_m1_m8_m9_norm.rda")
+} else {
+   load(file="../results/physeq_m11_norm.rda")
+  }
+
+load(file="../results/soil_selected.rda")
+
+# add soil variables to the phyloseq object
+design_table <- data.frame(sample_data(physeq_norm))
+
+design_table <-left_join(design_table,
+                         soil_selected, by ="field") %>%
+  tibble::column_to_rownames("field")
+
+sample_data(physeq_norm) <- design_table
+
+# we need a variable field
+sample_data(physeq_norm)$field <- sample_names(physeq_norm)
+
+
+
+```
+
+```{r}
+
+env_data <-data.frame(sample_data(physeq_norm))
+
+# for the RDA
+# reduced_set<- env_data %>% dplyr::select(-field,- library, - year)
+reduced_set<- env_data %>% dplyr::select(Mg:Na)
+
+
+# OTU
+taxonTable <-otu_table(physeq_norm, taxa_are_rows = FALSE)
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+```
+
+
+\newpage
+
+# Constrained Analysis
+
+## forward selection with ordistep
+
+```{r, echo=FALSE}
+
+mod0<- rda(taxon_table_hell ~ Condition(env_data$library) , data = reduced_set)
+
+mod1 <- rda(taxon_table_hell ~ .+Condition(env_data$library), data = reduced_set)
+
+anova(mod1)
+```
+
+```{r, eval = FALSE}
+
+# takes a lot of time 
+# only run this code chunk by hand
+
+ mod2 <-ordistep(mod0, scope = formula(mod1),  direction = 'forward', permutations = 999)
+
+ 
+if(m1m8m9 == TRUE) {
+   save(mod2,file="../results/ordistep.rda")}else {
+   save(mod2,file="../results/ordistep_m11.rda")
+ }
+
+
+p.adjust(mod2$anova$`Pr(>F)`, method= "holm")
+
+mod2$call
+```
+
+rda(formula = taxon_table_hell ~ Condition(env_data$library) + 
+    pH + K + sand + MIC + B + Nmin + resp + Mn + clay + Ptot, 
+    data = reduced_set)
+    
+Different model with microbials11 (second sequencing), iron is new and clay and Ptot are missing
+
+Call: rda(formula = taxon_table_hell ~ Condition(env_data$library) +
+pH + sand + K + MIC + B + resp + Fe + Mn + Nmin, data = reduced_set)
+
+
+## forward selection with ordiR2step
+
+
+```{r, echo = FALSE, eval = FALSE}
+# takes a bit less time than ordistep
+# only run this code chunk by hand
+
+adjR2.tbrda <- RsquareAdj(mod1)$adj.r.squared #   0.1560872 - adjusted R2 explained by all variables is 16%
+
+  mod3<- ordiR2step (mod0, scope = formula (mod1), R2scope = adjR2.tbrda, direction = 'forward', permutations = 999)
+#  
+# save(mod3, file="../results/ordi2step.rda")
+
+load(file="../results/ordi2step.rda")
+
+
+mod3$anova
+mod3$call
+
+
+ # write.csv(mod3$anova, "../results/ordi2step_results.csv.csv")
+
+
+#p.adjust(mod3$anova$`Pr(>F)`, method= "holm")
+
+global_anova <-anova(mod3, permutations=how(nperm=999))
+
+RsquareAdj(mod3)$adj.r.squared
+```
+
+rda(formula = taxon_table_hell ~ Condition(env_data$library) + 
+    pH + K + clay + MIC + resp + Nmin +  Mn +B + Ptot + sand , 
+    data = reduced_set)
+
+Comparing model from ordistep and from  ordiR2step: they are a bit different, WHC is only present with the first call, Ptot only present with the second call.
+
+Since the results are similar but ordiR2step is faster, let's use the second one for the leave-one-out validation.
+
+
+\newpage
+
+## RDA with only the variables selected by ordiR2step with m1_m8_m9
+
+
+```{r, echo = TRUE}
+
+
+var_model<- env_data %>% 
+  dplyr::select(field, library, pH, K,  clay,  MIC, resp, Nmin, Mn,B,  Ptot, sand)
+
+variable_selection <- var_model %>%
+  dplyr::select(-library, -field)
+
+```
+
+
+```{r, repeat_rda}
+
+
+mod4 <- rda(taxon_table_hell ~ .+ Condition(var_model$library), data = variable_selection)
+
+mod4$call
+
+
+
+#summary(mod4, axes=0)
+print("R2")
+(R2<-RsquareAdj(mod4)$r.squared)
+print("adjusted R2")
+(R2<-RsquareAdj(mod4)$adj.r.squared)
+
+# takes a lot of time
+# p 221: global test of the RDA results
+
+ # global_anova <-anova(mod4, permutations=how(nperm=999))
+# save(global_anova , file = "../results/global_anova.rda")
+
+
+# test of all canonical axes 
+# takes a lot of time
+
+ # result_anova_axis <-anova(mod4, by="axis", permutations=how(nperm=999))
+ # save(result_anova_axis , file = "../results/anova_axis.rda")
+
+load(file="../results/anova_axis.rda")
+load(file="../results/global_anova.rda")
+
+print("global test")
+
+global_anova
+
+print("test all canonical axes")
+
+result_anova_axis
+
+# the first 4 axes are significant
+
+# Borcard et al p 213 and 216
+#
+# plot(mod4, scaling=2, display=c("lc","cn"))
+# they recommend to use the lc scores instead of the wa
+
+# axes three and four
+# plot(mod4, scaling=2, display=c("lc","cn"), choices = c(3,4))
+
+```
+
+Klaus's question: what is R2 if not correcting for year/library?
+
+```{r}
+
+mod5 <- rda(taxon_table_hell ~ ., data = variable_selection)
+
+print("R2")
+(R2<-RsquareAdj(mod5)$adj.r.squared)
+
+```
+
+\newpage
+
+
+## Triplot RDA 
+
+
+
+```{r prepare_data_plot}
+
+#ord$eig
+eig2 <- eigenvals(mod4)
+#eig2 / sum(eig2)
+#cumsum(eig2 / sum(eig2))
+
+percent_RDA <-round(eig2 / sum(eig2)*100,1)
+
+coordi_RDA <- (paste("RDA", c(1:9),
+                 paste(" (",percent_RDA[1:9],"%",")",sep=""),
+                 sep=""))
+
+
+species_scores_rda <-scores(mod4, 
+                 choice=1:2,
+                 scaling="species",
+                 display="sp")
+
+sites_scores_rda <-scores(mod4, 
+                 choice=1:2,
+                 scaling="species",
+                 display="lc")
+
+
+load(file="../results/m1_m8_m9_top_OTU.rda")
+
+# core community
+core_species_rda<- which(colnames(taxonTable) %in% top_OTU$otu)
+
+env_arrow_rda <- mod4$CCA$biplot[,1:2]
+
+# save(sites_scores_rda, species_scores_rda, core_species_rda, env_arrow_rda, coordi_RDA, file="../results/triplot_mod4.rda")
+
+```
+
+Interpreting the results of the RDA using the length of the arrows
+ 
+ 
+```{r, echo = TRUE}
+sqrt(rowSums(env_arrow_rda^2) %>% sort())
+```
+
+
+```{r, prepare_data_plot_RDA}
+
+# Settings
+ahead <- 0.05   # Length of arrow heads
+offset <- 0.1 # distance between arrow head and center of blue text
+mult_arrow<-4
+mult_species <-4
+
+sites <- left_join(sites_scores_rda %>% 
+                     as.data.frame() %>%
+                     tibble::rownames_to_column("field"),
+                   env_data %>% 
+                     dplyr::select(year, field), 
+                   by = "field") %>% 
+  mutate(year = as_factor(year))
+
+species <- data.frame()
+
+# p 219 Borcard
+spe.good.rda <- goodness(mod4) # by default species
+sel.sp.rda <- which (spe.good.rda[,2]>=0.3) # cumulative
+
+
+species <-  (species_scores_rda * mult_species) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("OTU") %>% 
+  #mutate(has_label = OTU %in% top_OTU$otu)
+  mutate(has_label = OTU %in% names(sel.sp.rda))
+
+# alternatively label extreme sites
+species_label <- species %>% 
+  filter(abs(RDA1)>1 | abs(RDA2)>1)
+
+
+
+environment <- (env_arrow_rda * mult_arrow) %>%
+  as.data.frame() %>% 
+  dplyr::select("RDA1", "RDA2") %>%
+  tibble::rownames_to_column("environment") %>%
+  mutate(len = sqrt(RDA1^2 + RDA2^2), 
+       hoffset = RDA1/len*offset, voffset = RDA2/len*offset)
+
+```
+
+
+
+```{r plot_triplot_ggplot2}
+
+# Plot
+fig <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_point(aes(RDA1, RDA2), color = "grey", 
+             shape = "cross", data = species) +
+  geom_text(aes(RDA1, RDA2, label = OTU), color = "grey", 
+              hjust = 0, nudge_x = .05, 
+            data = species %>% filter(.data$has_label)) +
+  geom_point(aes(RDA1, RDA2, color = year), data = sites) +
+  geom_text(aes(RDA1, RDA2, color = year, label = field), 
+              hjust = 0, nudge_x = .05, data = sites) +
+  geom_segment(aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+                 color = "blue", 
+               arrow = arrow(length=unit(0.02,"npc"), type = "open"),
+               data = environment) +
+  geom_text(aes(RDA1 + hoffset, RDA2 + voffset, 
+                label = environment), color = "blue",
+            data = environment) +
+  coord_equal(ratio = 1, clip = "off") +
+  theme_bw() +
+  labs(x = coordi_RDA[1], y = coordi_RDA[2]) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(legend.position = "none")
+
+print(fig) 
+  
+b <- ggplot_build(fig)
+b$layout$panel_params[[1]]$x.range
+b$layout$panel_params[[1]]$y.range
+
+if(makeFig == TRUE)
+  ggsave("../figures/RDA_triplot.pdf",
+      width = 12, height = 12, units = "cm")
+
+```
+
+## two biplots
+
+
+```{r plot_biplot_1, fig.height = 4}
+
+# https://stackoverflow.com/questions/25061822/ggplot-geom-text-font-size-control/25062509
+geom.text.size = 3
+theme.size = (14/5) * geom.text.size
+
+
+# Plot
+fig1 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point( data = sites,
+  #             aes(RDA1, RDA2, color = year)) +
+  geom_text(data = sites,
+            aes(RDA1, RDA2, color = year, label = field), 
+              #vjust = 0.2, nudge_y = .1,  
+            size = geom.text.size) +
+  geom_segment(data = environment,
+               aes(x = 0, y = 0, 
+                   xend = RDA1, yend = RDA2), 
+                 color = "blue", 
+               arrow = arrow(length=unit(0.02,"npc"), 
+                             type = "open")) +
+  geom_text(data = environment, 
+            aes(RDA1 + hoffset, RDA2 + voffset, 
+                label = environment), 
+            size = geom.text.size,
+            color = "blue") +
+    labs(x = coordi_RDA[1], y = coordi_RDA[2]) +
+   xlim(-3.3,2.6)+
+  #ylim(-3,3)+
+   coord_equal(ratio = 1, clip = "off") +
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(legend.position = "none")
+
+fig1
+
+```
+
+
+
+```{r plot_biplot_2, fig.height = 4}
+
+# Plot
+fig2 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_point(data = species,
+             aes(RDA1, RDA2), 
+             color = grey(0.4), size = 1)  +
+  geom_text(data = species  %>% 
+              filter(abs(RDA1)>1 | abs(RDA2)>1),
+            aes(RDA1, RDA2, label = OTU), 
+            color = grey(0.4), 
+            hjust = 0.2, nudge_y = .2, 
+            size = geom.text.size) +
+   geom_segment(data = environment,
+                aes(x = 0, y = 0, 
+                    xend = RDA1, yend = RDA2), 
+                 color = "blue", 
+               arrow = arrow(length=unit(0.02,"npc"), 
+                             type = "open")) +
+  geom_text(data = environment,
+            aes(RDA1 + hoffset, RDA2 + voffset, 
+                label = environment),
+            size = geom.text.size, 
+            color = "blue") +
+   xlim(-3.3,2.6)+
+   #ylim(-3,3)+
+    coord_equal(ratio = 1, clip = "off") +
+  labs(x = coordi_RDA[1], y = coordi_RDA[2]) +
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(legend.position = "none")
+
+fig2
+
+```
+
+```{r}
+
+two_biplots <-plot_grid(fig1 + theme_main, 
+                        fig2 + theme_main, 
+                        labels = c('A', 'B'),
+                        label_size = 12)
+
+print(two_biplots)
+
+if(makeFig == TRUE)
+  ggsave("../figures/rda_both_biplots.pdf",
+       two_biplots,
+       width = 16, height = 9, units = "cm")
+
+```
+
+ 
+\newpage
+
+## interpreation of RDA
+
+```{r}
+
+# ggplot(for_gg, aes(x = var, y = otu)) + 
+#   geom_point() +
+#   stat_smooth(method = "lm", col = "red")
+
+
+ggplotRegression <- function (fit, otu, var) {
+ggplot(fit$model, 
+       aes_string(x = names(fit$model)[2], 
+                  y = names(fit$model)[1])) + 
+  geom_point() +
+  stat_smooth(method = "lm", col = "red") +
+  labs(x = var,
+       y = "abdundance",
+       title = otu,
+       subtitle = 
+         paste("Adj. R2 = ", signif(summary(fit)$adj.r.squared, 2),
+                     " P =" , signif(summary(fit)$coef[2,4], 2)))+
+    theme_bw()
+  
+  
+}
+
+```
+
+
+```{r, echo = FALSE}
+
+xx<-as.data.frame (taxon_table_hell)
+
+## OTU2 and sand
+for_gg <- data.frame("var" = var_model$sand, "otu" = xx$OTU2 )
+
+
+p1 <- ggplotRegression(lm(otu ~ var, dat = for_gg), 
+                       otu = "OTU2", 
+                       var = "sand")
+
+## OTU2 and Potassium
+for_gg <- data.frame("var" = var_model$K, "otu" = xx$OTU2)
+
+
+p2 <- ggplotRegression(lm(otu ~ var, dat = for_gg), 
+                       otu = "OTU2", 
+                       var = "K")
+
+
+## OTU6
+for_gg <- data.frame("var" = var_model$pH, "otu" = xx$OTU6)
+
+
+p3 <- ggplotRegression(lm(otu ~ var, dat = for_gg), 
+                       otu = "OTU6", 
+                       var = "pH")
+## OTU5
+for_gg <- data.frame("var" = var_model$pH, 
+                     "otu" = xx$OTU5)
+
+
+p4<- ggplotRegression(lm(otu ~ var, dat = for_gg), 
+                       otu = "OTU5", 
+                       var = "pH")
+
+```
+
+```{r, eval = TRUE}
+
+four_regression <-plot_grid(p1 + theme_supp,
+                      p2+ theme_supp, 
+                      p3+ theme_supp,
+                      p4+ theme_supp,
+                      labels = c('A', 'B', 'C', 'D'),
+                      nrow = 2,
+                      label_size = 12)
+
+print(four_regression)
+
+if(makeFig == TRUE) ggsave("../figures/four_regressions.pdf",
+       four_regression,
+       width = 16, height = 16, units = "cm")
+
+```
+
+

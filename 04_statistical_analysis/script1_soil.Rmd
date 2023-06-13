@@ -1,0 +1,742 @@
+---
+title: "Predicting fungal communities from soil properties"
+subtitle: "Script 1: soil properties"
+author: Jan Waelchli and Natacha Bodenhausen 
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+        toc: yes
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+# does not work with my computer
+## set source to file location
+#library(rstudioapi)
+#setwd(dirname(getActiveDocumentContext()$path))
+
+#libraries
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE)
+suppressPackageStartupMessages(library(tidyverse))
+library(vegan) # not sure if it necessary because it is in phyloseq
+library("phyloseq")
+library("kableExtra") # to style the tables 
+library(soiltexture) # ternary plot
+library(ggcorrplot) # correlogram
+library(cowplot) # plot_grid => several plots in one figure
+library(viridis) # color for people with colorblindness  
+library(ggrepel) # geom_text_repel
+
+
+# same color as ggplot
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+set.seed(8037)
+
+# logical: would you like figures?
+makeFig <- FALSE
+
+# logical: would you like to save R objects for the next scripts?
+saveRObjects <- FALSE
+
+
+# dir.create("../figures")
+# dir.create("../results")
+
+```
+
+
+```{r}
+
+my_theme <- theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+  
+theme_main <- theme(text = element_text(size = 10))
+
+theme_supp <- theme(text = element_text(size = 10))
+
+theme_presentation <- theme(text = element_text(size = 20))
+
+
+```
+
+
+# Material and methods 
+
+## 2018
+
+22 fields were sampled in the spring 2018
+
+4 DNA extractions per field done by Alain in the summer 2018.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial1" was prepared by Alain at Reckenholz and sequenced by FGCZ.
+
+
+## 2019
+
+25 fields were sampled in the spring 2019
+
+4 DNA extractions per field done by Alain in the spring 2020.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial6" was prepared by Markus at UniBasel and sequenced by Unibern.
+
+Quality of sequencing really bad, so Gabriel prepared a second library, called "microbial8".
+
+## 2020
+
+12 fields were sampled in the spring 2020
+
+4 DNA extractions per field  done by Alain in the winter 2021.
+
+ITS1F and ITS4 primers were used to amplify both ITS1 and ITS2.
+
+Library "microbial9" was prepared by Gabriel at Uni Basel and sequenced in Bern.
+
+## Bioinformatics
+
+Prepared by Jan Wälchli with new taxonomy from November 2021.
+
+\newpage
+
+# Soil data
+
+```{r new_soil_data}
+
+soil_data_2018 <- read_csv("../05_metadata/consolidatedSoilData_2018.csv")
+
+
+soil_data_2018 <-soil_data_2018 %>% 
+  mutate(year = 2018) %>% 
+  dplyr::rename(field = sample_name)
+
+
+soil_data_2019 <- read_csv("../05_metadata/consolidatedSoilData_2019.csv")
+
+soil_data_2019 <-soil_data_2019 %>% 
+  mutate(year = 2019)
+
+
+soil_data_2020 <- read_csv("../05_metadata/consolidatedSoilData_2020.csv")
+
+soil_data_2020 <-soil_data_2020 %>% 
+  mutate(year = 2020)
+
+
+```
+
+```{r, echo = TRUE}
+
+all_variables <-intersect(intersect(colnames(soil_data_2018), colnames(soil_data_2019)), colnames(soil_data_2020))
+
+all_soil <- bind_rows( soil_data_2018 %>%
+                         dplyr::select(all_of(all_variables)),
+                       soil_data_2019 %>%
+                         dplyr::select(all_of(all_variables)),
+                       soil_data_2020 %>%
+                         dplyr::select(all_of(all_variables)))
+
+
+```
+
+
+
+```{r}
+
+## remove SOLVITA variables because they are missing for some fields
+
+all_soil<- all_soil %>% dplyr::select(-respiration_lbu, -slan_lbu, -vast_lbu, -fertility_lbu)
+
+```
+
+We have `r nrow(all_soil)` samples and `r ncol(all_soil)` variables.
+
+\newpage
+
+## Soil Texture 
+
+
+```{r ternary_plot_2018, fig.height=8}
+
+texture<-all_soil %>%
+  dplyr::select(c("clay_agro",
+                  "silt_agro",
+                  "sand_agro", 
+                  "field"))
+
+texture <- texture %>% 
+  dplyr::rename(CLAY = clay_agro, 
+                SILT = silt_agro, 
+                SAND = sand_agro)
+
+texture <- texture %>%
+  column_to_rownames("field")
+
+# humus also is included in texture calculated by lbu
+
+# plot( (100-rowSums(texture)), all_soil$humus_agro)
+
+# so need to re-normalize after removing humus
+
+## normalize to 100%
+texture_norm <- texture/rowSums(texture)*100
+
+# rowSums(texture_norm)
+
+# add year to color the points
+texture_norm <- left_join(texture_norm %>%
+                            rownames_to_column("field"),
+                          all_soil %>% dplyr::select(field, year),
+by = "field")
+
+## ggplot colors
+
+texture_norm <-texture_norm %>%
+  mutate(color = as_factor(year))
+
+three_color <-gg_color_hue(3)
+
+texture_norm <-texture_norm %>%
+  mutate(color = recode(color, 
+                        "2018" = "#F8766D",
+                        "2019" = "#00BA38",
+                        "2020" ="#619CFF"))
+
+ 
+texture_norm <-texture_norm %>%
+  mutate(color = as.character(color))
+                                      
+texture_norm <- texture_norm %>%
+  column_to_rownames("field")
+
+```
+
+
+### Table of the classes
+
+```{r}
+
+table_classes <-TT.points.in.classes(
+    tri.data=texture_norm,
+    class.sys = "USDA.TT" )
+
+```
+
+
+```{r}
+  
+table1<-data.frame (
+    name = c("clay", 
+             "silty clay", 
+             "sandy clay", 
+             "clay loam", 
+             "silty clay loam", 
+             "sandy clay loam", 
+             "loam", 
+             "silty loam", 
+             "sandy loam", 
+             "silt", 
+             "loamy sand", 
+             "sand"),
+    number_fields=rowSums(t(table_classes)))
+
+colnames(table1) <- c("class name", "number of samples") 
+  
+kable(table1, caption = "Soil texture data classified with United States Department of Agriculture classification")
+
+```
+
+###  get the class for each field and add to supplemental table
+
+```{r, echo = FALSE, eval = TRUE}
+
+table_classes <- as.data.frame(table_classes)
+
+rownames(table_classes) <- all_soil$field
+
+
+# Table of zeroes and ones, only one 1 per row
+stopifnot(all(rowSums(table_classes) == 1))
+
+stopifnot(all(as.matrix(table_classes) %in% c(0,1)))
+
+# fun <- function(bla){
+#  names(bla)[bla == 1]
+# }
+
+# fun(table_classes[i,])
+
+xx <-apply(table_classes, 1, function(x) {names( x )[x == 1]})
+
+xx <- as.data.frame(xx) %>% rownames_to_column("field")%>%
+  dplyr::rename(soil_texture = xx)
+
+# same results but with which
+# colnames(table_classes)[apply(table_classes, 1, function(x) which(x == 1))]
+
+# to do add to all soil and write csv
+
+table_S1 <- inner_join(all_soil, xx , by = "field")
+
+
+if(makeFig == TRUE) write_csv(table_S1, "../results/Supplementary_Table1.csv")
+
+  
+```
+
+### label a subset of the fields
+
+most fields are clay loam or loam with 13 fields being different.
+
+```{r}
+
+
+sum_classes <- table_classes %>%
+  dplyr::summarise(across(everything(), sum))
+
+new_classes<- tibble(class =
+                          names(sum_classes),
+                     values = as_vector(sum_classes))
+  
+
+# rare classes
+new_classes <- new_classes %>%
+  filter(values<4) %>%
+  filter(values>0) 
+
+
+rare_classes <-table_classes %>%
+  dplyr::select(new_classes$class) %>%
+  filter(rowSums(.)>0) # remove empty rows
+
+subset_fields <- texture_norm %>%
+  filter(rownames(.) %in% rownames(rare_classes))
+
+
+labelz<- rownames(subset_fields)
+
+colorz <- subset_fields$color
+
+```
+
+\newpage
+
+
+### ternary plot
+
+```{r, fig.height= 8, eval = TRUE}
+
+geo <-TT.plot(
+	class.sys = "USDA.TT",
+	tri.data= texture_norm,
+	main = "",
+	 col = texture_norm$color,
+	cex.axis=1, cex.lab=1
+)
+
+
+TT.text(tri.data=subset_fields,
+				geo= geo,
+				pos=3,
+				offset=0.5,
+				cex=1,
+				labels=labelz,
+				font=2,
+				col=colorz)
+
+if(makeFig == TRUE){
+  
+  pdf("../figures/ternary_plot.pdf", 
+    width=17/cm(1), 
+    height=17/cm(1), 
+    fonts = "Helvetica", 
+    pointsize = 10 )
+
+
+
+geo <-TT.plot(
+	class.sys = "USDA.TT",
+	tri.data= texture_norm,
+	main = "",
+	 col = texture_norm$color,
+	cex.axis=1, cex.lab=1, pch=1,
+)
+
+
+TT.text(tri.data=subset_fields,
+				geo= geo,
+				pos=3,
+				offset=0.5,
+				cex=1,
+				labels=labelz,
+				font=2,
+				col=colorz)
+
+dev.off()
+}
+```
+
+### legend ternary plot
+
+```{r, eval = TRUE}
+
+
+# plot legend 
+xx <- data.frame("Year" = levels(as.factor(all_soil$year)),
+           "color"=  gg_color_hue(3))
+                      
+xx$y <- 3:1
+xx$x <- rep(1,each=3)
+
+if(makeFig == TRUE){
+  
+pdf("../figures/legend_ternary_plot.pdf", width=5/cm(1), height=7/cm(1), pointsize=10, fonts="Helvetica")
+  
+plot(xx$x, xx$y, 
+     col=as.character(xx$color), pch=1, 
+     yaxt="n", xaxt="n", 
+     ylab="", xlab="", 
+     bty="n",
+     ylim=c(0,5), xlim=c(0,3), xpd=TRUE)
+text(x=2, y=xx$y, labels=xx$Year)
+text(y=4, x=1, "year")
+
+dev.off()
+
+}
+
+```
+
+
+### legend year in colors
+
+```{r, eval = TRUE}
+
+
+# plot legend 
+xx <- data.frame("Year" = levels(as.factor(all_soil$year)),
+           "color"=  gg_color_hue(3))
+                      
+xx$y <- 3:1
+xx$x <- rep(1,each=3)
+
+if(makeFig == TRUE){ 
+
+pdf("../figures/legend_year_color.pdf", width=5/cm(1), height=7/cm(1), pointsize=10, fonts="Helvetica")
+  
+plot(NULL, 
+     yaxt="n", xaxt="n", 
+     ylab="", xlab="", 
+     bty="n",
+     ylim=c(0,5), xlim=c(0,3), xpd=TRUE)
+text(x=2, y=xx$y, labels=xx$Year, col =as.character(xx$color) )
+
+dev.off()
+
+}
+
+
+
+```
+
+\newpage
+
+## correlation matrix
+
+http://www.sthda.com/english/wiki/ggcorrplot-visualization-of-a-correlation-matrix-using-ggplot2
+
+```{r}
+corr <- round(cor(dplyr::select(all_soil, -year, -field), method = "pearson"),1)
+
+
+ggcorrplot(corr, hc.order = TRUE, type = "lower",
+     outline.col = "white") + 
+  theme(axis.text.x = element_text(size=8),
+        axis.text.y = element_text(size=8),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8))+
+    theme(legend.position = "left")
+
+if(makeFig == TRUE) 
+ggsave("../figures/correlation_soil.pdf",
+      width = 17, height = 17,   units = "cm")
+
+```
+
+```{r}
+# EPS for illustrator
+if(makeFig == TRUE) 
+ggsave("../figures/correlation_soil.eps",
+      width = 17, height = 17,   units = "cm")
+
+```
+
+## use this correlation matrix to select a subset of 18 variables
+
+
+```{r, echo = TRUE}
+
+
+soil_selected <-all_soil %>%
+  dplyr::select(c("field","year", 
+                  "magnesium_H2O_lbu", "copper_EDTA_lbu",
+                  "phosphorus_CO2_lbu","Ptot_agro",
+                  "iron_EDTA_lbu", "sand_agro",
+                  "manganese_EDTA_lbu","Nmin_agro",
+                  "calcium_H2O_lbu","clay_agro",
+                  "respiration_agro","Corg_agro",
+                  "WHC_agro", "cMIC_agro",
+                  "ph_lbu","boron_EDTA_lbu",
+                  "potassium_CO2_lbu", "sodium_agro"))
+
+#plot(soil_selected$calcium_H2O_lbu, soil_selected$WHC_agro)
+
+# change names to shorter names for plotting
+
+soil_selected <- soil_selected %>% 
+  mutate(Mg = magnesium_H2O_lbu, 
+         Cu = copper_EDTA_lbu,
+         P = phosphorus_CO2_lbu,
+         Ptot = Ptot_agro,
+         Fe = iron_EDTA_lbu,
+         sand = sand_agro,
+         Mn = manganese_EDTA_lbu,
+         Nmin = Nmin_agro,
+         Ca = calcium_H2O_lbu,
+         clay = clay_agro,
+         resp = respiration_agro,
+         Corg  = Corg_agro,
+         WHC = WHC_agro,
+         MIC  = cMIC_agro,
+         pH = ph_lbu,
+         B = boron_EDTA_lbu,
+         K = potassium_CO2_lbu,
+         Na = sodium_agro,
+                     .keep ="unused")
+
+```
+
+
+\newpage
+
+## Principal Component Analysis
+
+```{r}
+
+var_PCA <-dplyr::select(soil_selected, -year) %>%
+  column_to_rownames("field")
+
+
+```
+
+
+```{r PCA ,echo=TRUE}
+
+# we first standardize the data:
+soil.scaled <- scale(var_PCA)
+# scales the columns
+# colSums(soil.scaled) # zero
+# boxplot(soil.scaled, main="Boxplot of standardized soil data")
+
+
+
+pca.res <- prcomp(soil.scaled)
+# pca.res$x[,1:2]
+
+```
+
+### how many components? 
+
+```{r}
+
+xx <-barplot(cumsum(pca.res$sdev^2/sum(pca.res$sdev^2)), 
+        ylim= c(0,1), 
+        ylab = "cumulative proportion", xpd=NA,
+        main="variance explained by the principal components")
+
+text(x=(xx+0.3), y=0.05, pos=3, 
+     srt=90,labels=colnames(summary(pca.res)$importance))
+
+abline(h=0.7)
+abline(h=0.9)
+```
+
+The number of components needed to summarize a given data set can be chosen based on different methods (Everitt and Hothorn, 2011): here we decided to keep the number of components that explain at least 70% of the total variation of the original variables. In our study, we found that the first four components explain 70% of the total variation of the original variables, so in theory we should present the results with PC1, PC2, PC3 and PCR4, but for the paper we only show PC1 and PC2. 
+
+The first axis separates according to fertility variables.
+
+The second axis separates according to Phosphorus.
+
+
+```{r}
+
+# interpretation
+
+#plot(pca.res$x[,1], all_soil$Corg_agro)
+
+ #plot(pca.res$x[,2], var_PCA$P)
+
+
+# plot(var_PCA$B, var_PCA$pH)
+# plot(var_PCA$WHC, var_PCA$Corg)
+
+```
+
+
+
+\newpage
+
+### PCA with ggplot
+
+```{r, prepare_data_pca}
+
+# https://stackoverflow.com/questions/25061822/ggplot-geom-text-font-size-control/25062509
+geom.text.size = 3
+theme.size = (14/5) * geom.text.size
+
+
+
+# Settings
+ahead <- 0.05   # Length of arrow heads
+offset <- 0.4 # distance between arrow head and center of blue text
+mult_arrow<-10
+
+
+sites <- as.data.frame(pca.res$x) %>% select(PC1, PC2) %>%
+  rownames_to_column("field") %>%
+  left_join(soil_selected %>% 
+              select(year, field), by = "field") %>%
+  mutate(year = as_factor(year))
+
+evt <- as.data.frame(pca.res$rotation) 
+
+percent_axis <-round(pca.res$sdev^2/sum(pca.res$sdev^2) *100,1)
+
+coordi <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis[1:2], "%",")",sep=""),
+                 sep=""))
+
+evt <- (evt * mult_arrow) %>%
+  as.data.frame() %>% dplyr::select("PC1", "PC2") %>%
+  tibble::rownames_to_column("environment") %>%
+  mutate(len = sqrt(PC1^2 + PC2^2), 
+       hoffset = PC1/len*offset, voffset = PC2/len*offset)
+
+```
+
+```{r}
+
+fig_pca <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+   geom_text(data = sites,
+             aes( x = PC1,  y = PC2, 
+                  label = field, 
+                  col = year),
+                  size = 3,
+             show.legend = TRUE) +
+  geom_segment(data = evt,
+               aes(x = 0, y = 0, 
+                   xend = PC1, yend = PC2), 
+                 color = "blue", 
+               arrow = arrow(length = unit(0.02,"npc"), 
+                             type = "open")) +
+   geom_text(data = evt,
+             aes(PC1 + hoffset, PC2 + voffset, 
+                label = environment),
+                  size = geom.text.size,
+             color = "blue") +
+  coord_equal(ratio = 1, clip = "off") +
+   labs(x = coordi[1], y = coordi[2]) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(legend.position = "none")
+
+print(fig_pca) 
+
+if(makeFig == TRUE) 
+ggsave("../figures/PCA_soil.pdf",
+       fig_pca + theme_main,
+       width = 8.5, height = 8, units = "cm")
+
+
+```
+
+
+## vector max distance from another sample
+
+
+```{r}
+# new vector : distance from center
+
+distance_center_pca <- sqrt(pca.res$x[,1]^2 + pca.res$x[,2]^2)
+
+pca_distance <- as.data.frame(distance_center_pca) %>% rownames_to_column("field")
+
+
+```
+
+
+
+```{r}
+# new vector : max euclidean distance 
+
+xx <- as.matrix(dist(soil.scaled, method = "euclidean"))
+
+yy <- cor(t(soil.scaled), method = "pearson")
+
+diag(yy) <- NA
+
+max_distance <- apply(as.matrix(yy), 1, FUN = max, na.rm = TRUE)
+
+max_distance <- as.data.frame(max_distance) %>% rownames_to_column("field")
+
+range(max_distance$max_distance)
+
+hist(max_distance$max_distance)
+```
+
+
+```{r}
+if(saveRObjects == TRUE){
+  save(max_distance , file = "../results/max_distance.rda")
+}
+
+```
+
+
+```{r}
+if(saveRObjects == TRUE){
+  save(pca_distance , file = "../results/pca_distance.rda")
+}
+
+```
+
+
+
+```{r}
+if(saveRObjects == TRUE){
+  save(table_S1 , file = "../results/all_soil.rda")
+}
+
+```
+
+
+```{r}
+if(saveRObjects == TRUE){
+  save(soil_selected , file = "../results/soil_selected.rda")
+}
+
+```
+
+

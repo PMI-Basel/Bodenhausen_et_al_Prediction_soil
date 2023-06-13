@@ -1,0 +1,210 @@
+---
+title: "Predict Microbial Community"
+subtitle: "Script 5: Analysis of fourth library"
+author: Jan Waelchli and Natacha Bodenhausen 
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+        toc: yes
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+
+## set source to file location
+
+#libraries
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE)
+suppressPackageStartupMessages(library(tidyverse))
+library(vegan)
+library("phyloseq")
+library(pander)
+
+# same color as ggplot
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+set.seed(8037)
+```
+
+```{r}
+
+my_theme <- theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+  
+theme_main <-theme(text = element_text(size = 10))
+theme_supp <-theme(text = element_text(size = 10))
+theme_presentation <-theme(text = element_text(size = 20))
+
+makeFig <- TRUE
+```
+
+```{r}
+
+#load unmerged m1m8m9 physeq file
+#load(file="../results/physeq_m1_m8_m9_norm_unmerged.rda")
+#physeq_m1m8m9_norm_unmerged <- physeq_norm; rm(physeq_norm)
+
+```
+
+```{r}
+
+#load physeq files and combine them
+
+#import and rename
+load(file="../results/physeq_m1_m8_m9_norm.rda")
+physeq_m1m8m9_norm <- physeq_norm; rm(physeq_norm)
+load(file="../results/physeq_m11_norm.rda")
+physeq_m11_norm <- physeq_norm; rm(physeq_norm)
+
+#sample_tables
+#m1m8m9
+sample_table_m1m8m9 <- physeq_m1m8m9_norm@sam_data
+#m11 (adapt to m1m8m9 and rename fields and libraries)
+sample_table_m11 <- physeq_m11_norm@sam_data[,colnames(physeq_m11_norm@sam_data) %in% c("field", "library")]
+sample_table_m11$field <- paste0(sample_table_m11$field, "r")
+sample_table_m11$library <- paste0(sample_table_m11$library, "r")
+rownames(sample_table_m11) <- sample_table_m11$field
+#combine
+sample_table <- rbind(sample_table_m1m8m9, sample_table_m11)
+
+#OTU table
+#m1m8m9
+OTU_m1m8m9 <- physeq_m1m8m9_norm@otu_table %>% as.data.frame()
+#m11 (rename samples)
+OTU_m11 <- physeq_m11_norm@otu_table %>% as.data.frame()
+rownames(OTU_m11) <- paste0(rownames(OTU_m11), "r")
+
+#use only OTUs present in m1m8m9 and m11
+OTUs_to_use <- colnames(OTU_m11)[colnames(OTU_m11) %in% colnames(OTU_m1m8m9)]
+OTU_m1m8m9 <- OTU_m1m8m9[, colnames(OTU_m1m8m9) %in% OTUs_to_use]
+OTU_m11 <- OTU_m11[, colnames(OTU_m11) %in% OTUs_to_use]
+OTU <- rbind(OTU_m1m8m9, OTU_m11) %>% as.matrix()
+
+#created a combined physeq object
+physeq_norm <- phyloseq(sample_data(sample_table), otu_table(OTU, taxa_are_rows=F))
+
+```
+
+## PERMANOVA (hellinger distance)
+
+```{r}
+
+#unmerged
+#bdist_m1m8m9_unmerged <- dist(decostand(otu_table(physeq_m1m8m9_norm_unmerged), method="hellinger"))
+#df <- data.frame(field=physeq_m1m8m9_norm_unmerged@sam_data$field, year=physeq_m1m8m9_norm_unmerged@sam_data$library)
+#bdist_paov_m1m8m9_unmerged <- adonis2(formula = bdist_m1m8m9_unmerged ~ year + field, data = df)
+#pander(bdist_paov_m1m8m9_unmerged, caption="PERMANOVA: m1m8m9 unmerged")
+
+#merged
+bdist_m1m8m9 <- dist(decostand(otu_table(OTU_m1m8m9, taxa_are_rows = F), method="hellinger"))
+
+bdist_paov_m1m8m9 <- adonis2(formula = bdist_m1m8m9 ~ year, data = data.frame(year=sample_table_m1m8m9$library))
+
+pander(bdist_paov_m1m8m9, caption="PERMANOVA: m1m8m9 merged")
+
+ # write.csv(bdist_paov_m1m8m9, "../results/adonis2_m1m8m9.csv")
+
+
+bdist_m11 <- dist(decostand(otu_table(OTU_m11, taxa_are_rows = F), method="hellinger"))
+
+bdist_paov_m11 <- adonis2(bdist_m11 ~ year, data=data.frame(year=sample_table_m11$library))
+
+pander(bdist_paov_m11, caption="PERMANOVA: m11 merged")
+
+
+ #write.csv(bdist_paov_m11, "../results/adonis2_m11.csv")
+
+```
+
+## PCA (hellinger distance) with vegan and ggplot2
+
+```{r}
+
+# OTU
+taxonTable <-otu_table(physeq_norm, taxa_are_rows = FALSE)
+designTable <-sample_data(physeq_norm)
+
+taxon_table_hell <- sqrt(taxonTable) # hellinger is sqrt relative abundance
+
+```
+
+```{r}
+
+res_pca  <- rda(taxon_table_hell)
+
+percent_axis_pca <-round(res_pca$CA$eig/res_pca$tot.chi *100,1)
+
+coordi_pca <- (paste("PC", 
+                 paste(c(1:2), " (",percent_axis_pca[1:2], "%",")",sep=""),
+                 sep=""))
+
+
+
+
+sites_for_plot <-cbind(as.data.frame(scores(res_pca)$sites), designTable)
+
+species_for_plot <-as.data.frame(scores(res_pca)$species)
+
+```
+
+```{r, warning=F}
+
+#rename to resequenced
+sites_for_plot$library <- as.character(sites_for_plot$library)
+sites_for_plot$library[sites_for_plot$library %in% c("2018r","2019r","2020r")] <- "resequenced"
+sites_for_plot$library <- as.factor(sites_for_plot$library)
+
+#paired datapoints
+fields <- sites_for_plot$field[sites_for_plot$library!="resequenced"] %>% unique() #get unique fields
+sites_for_plot$paired <- NA #new col for paired data
+#loop over each field
+for (i in 1:length(fields)) {
+  field <- fields[i] #field name
+  bool <- grepl(field,sites_for_plot$field,fixed = T) #select rows
+  sites_for_plot$paired[bool] <- i #add pairing
+}
+
+#remove names from 2022 data to make the graphic less overloaded
+sites_for_plot$field2 <- sites_for_plot$field
+sites_for_plot$field2[sites_for_plot$library=="resequenced"] <- NA
+
+
+```
+
+```{r}
+
+pca <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  # geom_point(aes( PC1,  PC2), color = "grey", shape = "cross", 
+  #            data = species_for_plot) +
+  geom_point(aes( PC1,  PC2, color = library), 
+             data = sites_for_plot) +
+  geom_text(aes( PC1,  PC2, color = library, 
+                 label = field2), 
+            hjust = 0, nudge_x = .05, 
+            data = sites_for_plot, show.legend = FALSE ) +
+  geom_line(aes(PC1,  PC2, group = paired), data = sites_for_plot)+
+  coord_equal(ratio = 1, clip = "off",
+             xlim = c(-2, 2),
+             ylim = c(-2,2.5))+
+  scale_color_manual(values=c("#F8766D","#00BA38","#619CFF","dimgrey"))+
+  theme_bw() +
+  my_theme+
+  labs(x = coordi_pca[1], y = coordi_pca[2])+
+  theme(legend.position = "bottom")
+
+
+print(pca) 
+  
+if(makeFig == TRUE) ggsave("../figures/PCA_resequenced_fields.pdf", pca + theme_main, width = 17, height=17, units = "cm")
+
+```
+
+\newpage
